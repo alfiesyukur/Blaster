@@ -9,6 +9,7 @@
 #include "Components/WidgetComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "Net/UnrealNetwork.h"
 
 ABlasterCharacter::ABlasterCharacter()
@@ -41,6 +42,7 @@ void ABlasterCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME_CONDITION(ABlasterCharacter, OverlappingWeapon, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(ABlasterCharacter, AO_Yaw, COND_SimulatedOnly);
 }
 
 void ABlasterCharacter::PostInitializeComponents()
@@ -61,6 +63,8 @@ void ABlasterCharacter::BeginPlay()
 void ABlasterCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	
+	AimOffset(DeltaTime);
 }
 
 void ABlasterCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -125,6 +129,14 @@ void ABlasterCharacter::EquipButtonPressed()
 	}
 }
 
+void ABlasterCharacter::ServerEquipButtonPressed_Implementation()
+{
+	if (Combat)
+	{
+		Combat->EquipWeapon(OverlappingWeapon);
+	}
+}
+
 void ABlasterCharacter::CrouchButtonPressed()
 {
 	if (bIsCrouched)
@@ -153,15 +165,48 @@ void ABlasterCharacter::AimButtonReleased()
 	}
 }
 
-void ABlasterCharacter::ServerEquipButtonPressed_Implementation()
+void ABlasterCharacter::AimOffset(float DeltaTime)
 {
-	if (Combat)
+	if (Combat && Combat->EquippedWeapon == nullptr) return;
+	if (HasAuthority())
 	{
-		Combat->EquipWeapon(OverlappingWeapon);
+		FVector Velocity = GetVelocity();
+		Velocity.Z = 0.f;
+		const float Speed = Velocity.Size();
+		const float bIsInAir = GetCharacterMovement()->IsFalling();
+		if (Speed == 0.f && !bIsInAir) // standing still and not jumping.
+		{
+			const FRotator CurrentAimRotation = FRotator(0.f, GetBaseAimRotation().Yaw, 0.f);
+			const FRotator DeltaAimRotation = UKismetMathLibrary::NormalizedDeltaRotator(
+				CurrentAimRotation, StartingAimRotation);
+			AO_Yaw = DeltaAimRotation.Yaw;
+			bUseControllerRotationYaw = false;
+		}
+		if (Speed > 0.f || bIsInAir) // Running / Jumping
+		{
+			StartingAimRotation = FRotator(0.f, GetBaseAimRotation().Yaw, 0.f);
+			AO_Yaw = 0.f;
+			bUseControllerRotationYaw = true;
+		}
+	}
+
+	AO_Pitch = GetBaseAimRotation().Pitch;
+
+	if (AO_Pitch > 90.f && !IsLocallyControlled())
+	{
+		// map pitch from [270, 360] to [-90, 0]
+		const FVector2D InRange(270.f, 360.f);
+		const FVector2D OutRange(-90.f, 0.f);
+		AO_Pitch = FMath::GetMappedRangeValueClamped(InRange, OutRange, AO_Pitch);
+	}
+
+	if (!HasAuthority() && !IsLocallyControlled())
+	{
+		//UE_LOG(LogTemp, Warning, TEXT("AO_Yaw : %f"), AO_Yaw);
 	}
 }
 
-void ABlasterCharacter::OnRep_OverlappingWeapon(AWeapon* LastWeapon)
+void ABlasterCharacter::OnRep_OverlappingWeapon(AWeapon* LastWeapon) const
 {
 	if (OverlappingWeapon)
 	{
@@ -193,12 +238,12 @@ void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
 	OverlappingWeapon = Weapon;
 }
 
-bool ABlasterCharacter::IsWeaponEquipped()
+bool ABlasterCharacter::IsWeaponEquipped() const
 {
 	return (Combat && Combat->EquippedWeapon);
 }
 
-bool ABlasterCharacter::IsAiming()
+bool ABlasterCharacter::IsAiming() const
 {
 	return (Combat && Combat->bAiming);
 }

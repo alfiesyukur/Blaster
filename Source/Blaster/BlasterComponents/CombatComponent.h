@@ -36,6 +36,7 @@ protected:
 	void OnRep_EquippedWeapon();
 
 private:
+	UPROPERTY()
 	ABlasterCharacter* Character;
 
 	UPROPERTY(ReplicatedUsing = OnRep_EquippedWeapon)
